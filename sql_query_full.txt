@@ -1,0 +1,323 @@
+CREATE TABLE DIM_TIME (
+    time_key    NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    full_date   DATE,
+    day         NUMBER,
+    month       NUMBER,
+    year        NUMBER,
+    quarter     NUMBER
+);
+INSERT INTO DIM_TIME (full_date, day, month, year, quarter)
+SELECT DISTINCT
+    DATEID_CLEAN,
+    EXTRACT(DAY    FROM DATEID_CLEAN),
+    EXTRACT(MONTH  FROM DATEID_CLEAN),
+    EXTRACT(YEAR   FROM DATEID_CLEAN),
+    CEIL(EXTRACT(MONTH FROM DATEID_CLEAN)/3)
+FROM STG_RAW_DAILY
+WHERE DATEID_CLEAN IS NOT NULL;
+CREATE TABLE DIM_DC (
+    dc_key     NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    station_code    VARCHAR2(50),
+    address         VARCHAR2(500),
+    postcode        VARCHAR2(50)
+);
+DESC DIM_DC;
+
+INSERT INTO DIM_DC (station_code, address)
+SELECT DISTINCT
+    "station/id",
+    "station/address"
+FROM STG_RAW_META;
+CREATE TABLE DIM_VENDOR (
+    vendor_key    NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    vendor_score  NUMBER
+);
+INSERT INTO DIM_VENDOR (vendor_score)
+SELECT DISTINCT 
+    "vendor/score"
+FROM STG_RAW_META;
+CREATE TABLE DIM_PRODUCT (
+    product_key     NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    edition_id      VARCHAR2(50),
+    title           VARCHAR2(500),
+    author          VARCHAR2(200),
+    product_type    VARCHAR2(100)
+);
+DESC STG_RAW_SALES;
+
+INSERT INTO DIM_PRODUCT (edition_id, title, author, product_type)
+SELECT DISTINCT
+    s."EdID",
+    m."publication/title",
+    m."author/first_name" || ' ' || m."author/last_name",
+    s."Typ"
+FROM STG_RAW_SALES s
+JOIN STG_RAW_META m 
+    ON s."EdID" = m."publication/ed";
+CREATE TABLE DIM_CHANNEL (
+    channel_key   NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    channel_code  VARCHAR2(10),
+    channel_name  VARCHAR2(50)
+);
+
+INSERT INTO DIM_CHANNEL (channel_code, channel_name) VALUES ('CH001', 'Amazon');
+INSERT INTO DIM_CHANNEL (channel_code, channel_name) 
+VALUES ('CH002', 'Barnes ' || '&' || ' Noble');
+
+INSERT INTO DIM_CHANNEL (channel_code, channel_name) VALUES ('CH003', 'In_Store');
+CREATE TABLE FACT_DAILY_PERF (
+    fact_key      NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    time_key      NUMBER REFERENCES DIM_TIME(time_key),
+    dc_key        NUMBER REFERENCES DIM_DC(dc_key),
+    product_key   NUMBER REFERENCES DIM_PRODUCT(product_key),
+    vendor_key    NUMBER REFERENCES DIM_VENDOR(vendor_key),
+    channel_key   NUMBER REFERENCES DIM_CHANNEL(channel_key),
+    units_sold    NUMBER,
+    unit_price    NUMBER,
+    discount      NUMBER,
+    binding_cost  NUMBER,
+    revenue       NUMBER,
+    gross_margin  NUMBER
+);
+DESC STG_RAW_DAILY;
+
+UPDATE STG_RAW_DAILY
+SET DATEID_CLEAN =
+    CASE 
+        WHEN REGEXP_LIKE(DATEID, '^[0-9]{2}-[A-Za-z]{3}-[0-9]{2}$')
+            THEN TO_DATE(DATEID, 'DD-MON-RR')
+        WHEN REGEXP_LIKE(DATEID, '^[0-9]{2}/[0-9]{2}/[0-9]{4}$')
+            THEN TO_DATE(DATEID, 'DD/MM/YYYY')
+        WHEN REGEXP_LIKE(DATEID, '^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+            THEN TO_DATE(DATEID, 'YYYY-MM-DD')
+        ELSE NULL
+    END;
+commit;
+SELECT DATEID, DATEID_CLEAN
+FROM STG_RAW_DAILY
+WHERE DATEID_CLEAN IS NOT NULL
+FETCH FIRST 20 ROWS ONLY;
+
+SELECT COUNT(*) FROM STG_RAW_SALES s JOIN STG_RAW_DAILY d ON s.PD = d.PD;
+
+SELECT COUNT(*) 
+FROM STG_RAW_SALES s 
+JOIN STG_RAW_DAILY d 
+ON d.DATEID_CLEAN =
+   CASE
+       WHEN REGEXP_LIKE(s."DateStamp", '^\d{2}-\d{2}-\d{4}$')
+           THEN TO_DATE(s."DateStamp", 'DD-MM-YYYY')
+       WHEN REGEXP_LIKE(s."DateStamp", '^\d{4}/\d{2}/\d{2}$')
+           THEN TO_DATE(s."DateStamp", 'YYYY/MM/DD')
+       WHEN REGEXP_LIKE(s."DateStamp", '^\d{2}/\d{2}/\d{4}$')
+           THEN TO_DATE(s."DateStamp", 'DD/MM/YYYY')
+   END;
+
+SELECT COUNT(*)
+FROM STG_RAW_SALES s
+JOIN STG_RAW_DAILY d
+ON s.PD = d.PD
+AND d.DATEID_CLEAN =
+    CASE
+        WHEN REGEXP_LIKE(s."DateStamp", '^\d{2}-\d{2}-\d{4}$')
+            THEN TO_DATE(s."DateStamp", 'DD-MM-YYYY')
+        WHEN REGEXP_LIKE(s."DateStamp", '^\d{4}/\d{2}/\d{2}$')
+            THEN TO_DATE(s."DateStamp", 'YYYY/MM/DD')
+        WHEN REGEXP_LIKE(s."DateStamp", '^\d{2}/\d{2}/\d{4}$')
+            THEN TO_DATE(s."DateStamp", 'DD/MM/YYYY')
+    END;
+SELECT COUNT(*) FROM STG_RAW_DAILY WHERE DATEID_CLEAN IS NOT NULL;
+SELECT 
+    s.PD,
+    s."DateStamp",
+    CASE
+        WHEN REGEXP_LIKE(s."DateStamp", '^\d{2}-\d{2}-\d{4}$')
+            THEN TO_DATE(s."DateStamp", 'DD-MM-YYYY')
+        WHEN REGEXP_LIKE(s."DateStamp", '^\d{4}-\d{2}-\d{2}$')
+            THEN TO_DATE(s."DateStamp", 'YYYY-MM-DD')
+        WHEN REGEXP_LIKE(s."DateStamp", '^\d{4}/\d{2}/\d{2}$')
+            THEN TO_DATE(s."DateStamp", 'YYYY/MM/DD')
+        WHEN REGEXP_LIKE(s."DateStamp", '^\d{2}/\d{2}/\d{4}$')
+            THEN TO_DATE(s."DateStamp", 'DD/MM/YYYY')
+        ELSE NULL
+    END AS converted_sales_date,
+    d.DATEID_CLEAN
+FROM STG_RAW_SALES s
+JOIN STG_RAW_DAILY d 
+    ON s.PD = d.PD
+ORDER BY s.PD;
+
+SELECT COUNT(*) 
+FROM STG_RAW_SALES s
+JOIN STG_RAW_DAILY d ON s.PD = d.PD;
+
+SELECT COUNT(*) FROM FACT_DAILY_PERF;
+
+INSERT INTO FACT_DAILY_PERF (
+    time_key, dc_key, product_key, vendor_key, channel_key,
+    units_sold, unit_price, discount, binding_cost, revenue, gross_margin
+)
+SELECT
+    t.time_key,
+    dc.dc_key,
+    p.product_key,
+    v.vendor_key,
+    ch.channel_key,
+
+    s."TQty",
+    s."UPrice",
+    s."Dscnt",
+    d.BC,
+    d.REV,
+    (d.REV - d.BC) AS gross_margin
+FROM STG_RAW_SALES s
+JOIN STG_RAW_DAILY d 
+      ON s.PD = d.PD
+LEFT JOIN STG_RAW_META m 
+      ON s."EdID" = m."publication/ed"
+LEFT JOIN DIM_TIME t
+      ON t.full_date = d.DATEID_CLEAN
+LEFT JOIN DIM_DC dc
+      ON dc.station_code = d.STNCODE
+LEFT JOIN DIM_PRODUCT p
+      ON p.edition_id = s."EdID"
+LEFT JOIN DIM_VENDOR v
+      ON v.vendor_score = m."vendor/score"
+LEFT JOIN DIM_CHANNEL ch
+      ON ch.channel_code = s."Chnl";
+
+SELECT COUNT(*) FROM DIM_VENDOR;
+SELECT COUNT(*) FROM FACT_DAILY_PERF;
+
+INSERT INTO DIM_VENDOR (vendor_score, vendor_name)
+SELECT DISTINCT 
+    m."vendor/score",
+    m."vendor/name"
+FROM STG_RAW_META m;
+
+
+INSERT INTO STG_RAW_META (
+    "publication/ed", 
+    "publication/title",
+    "author/first_name",
+    "author/last_name",
+    "vendor/score",
+    "station/id",
+    "station/name",
+    "station/region"
+) VALUES (
+    'E124', 'Unknown Title 124', 'John', 'Doe', 7, 'S001', 'Station A', 'Region1'
+);
+
+INSERT INTO STG_RAW_META (
+    "publication/ed",
+    "publication/title",
+    "author/first_name",
+    "author/last_name",
+    "vendor/score",
+    "station/id",
+    "station/name",
+    "station/region"
+) VALUES (
+    'E125',
+    'Unknown Title 125',
+    'Jane',
+    'Smith',
+    '8',
+    'S002',
+    'Station B',
+    'Region2'
+);
+
+
+SELECT
+    dc.address AS region,
+    p.title AS edition,
+    SUM(f.revenue - f.binding_cost) AS gross_margin,
+    RANK() OVER (
+        ORDER BY SUM(f.revenue - f.binding_cost) DESC
+    ) AS rn
+FROM FACT_DAILY_PERF f
+JOIN DIM_DC dc
+    ON f.dc_key = dc.dc_key
+JOIN DIM_PRODUCT p
+    ON f.product_key = p.product_key
+JOIN DIM_TIME dt
+    ON f.time_key = dt.time_key
+WHERE dt.YEAR = 2024
+  AND dt.QUARTER = 4
+GROUP BY dc.address, p.title;
+
+
+
+SELECT 
+    dt.YEAR,
+    dt.MONTH,
+    v.vendor_score,
+    SUM(f.binding_cost) AS total_binding_cost,
+    AVG(SUM(f.binding_cost)) OVER (
+        PARTITION BY v.vendor_score
+        ORDER BY dt.YEAR, dt.MONTH
+        ROWS BETWEEN 11 PRECEDING AND CURRENT ROW
+    ) AS rolling_12_month_avg
+FROM FACT_DAILY_PERF f
+JOIN DIM_VENDOR v 
+    ON f.vendor_key = v.vendor_key
+JOIN DIM_TIME dt 
+    ON f.time_key = dt.time_key
+GROUP BY 
+    dt.YEAR,
+    dt.MONTH,
+    v.vendor_score
+ORDER BY 
+    v.vendor_score,
+    dt.YEAR,
+    dt.MONTH;
+
+
+SELECT 
+    p.title AS edition,
+    c.channel_name,
+    SUM(f.units_sold) AS total_units,
+    ROUND(
+        SUM(f.units_sold) * 100 
+        / SUM(SUM(f.units_sold)) OVER (PARTITION BY p.title), 
+        2
+    ) AS pct_of_total
+FROM FACT_DAILY_PERF f
+JOIN DIM_PRODUCT p 
+    ON f.product_key = p.product_key
+JOIN DIM_CHANNEL c
+    ON f.channel_key = c.channel_key
+GROUP BY 
+    p.title, c.channel_name
+ORDER BY 
+    p.title, pct_of_total DESC;
+
+
+SELECT 
+    p.title AS edition,
+    SUM(f.revenue) AS total_revenue,
+    AVG(f.revenue - f.binding_cost) AS avg_margin
+FROM FACT_DAILY_PERF f
+JOIN DIM_PRODUCT p
+    ON f.product_key = p.product_key
+GROUP BY p.title
+ORDER BY total_revenue DESC;
+
+
+SELECT 
+    dc.address AS dc_name,
+    dc.address AS region,   -- using address as region substitute
+    (SUM(f.revenue) - SUM(f.binding_cost)) / NULLIF(SUM(f.revenue), 0) AS profit_margin_pct
+FROM FACT_DAILY_PERF f
+JOIN DIM_DC dc 
+    ON f.dc_key = dc.dc_key
+GROUP BY 
+    dc.address
+HAVING 
+    (SUM(f.revenue) - SUM(f.binding_cost)) / NULLIF(SUM(f.revenue), 0) < 0.15
+ORDER BY 
+    profit_margin_pct ASC;
+
+SELECT SYS_CONTEXT('USERENV','CURRENT_SCHEMA') FROM dual;
